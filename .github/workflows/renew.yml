@@ -6,6 +6,10 @@ on:
     # 每天北京时间 06:00 (UTC 22:00) 触发
     - cron: '0 13 * * *'
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   renew:
     runs-on: ubuntu-latest
@@ -14,7 +18,6 @@ jobs:
       max-parallel: 1
       fail-fast: false
       matrix:
-        # 如果有多个账号，写成 [1, 2, 3] 即可
         account_index: [1]
 
     steps:
@@ -85,4 +88,25 @@ jobs:
       with:
         name: debug-acc-${{ matrix.account_index }}
         path: "*.png"
-        retention-days: 3
+        retention-days: 1
+
+    - name: 🧹 清理代理与后台进程
+      if: always()
+      run: |
+        echo "正在终止 sing-box、浏览器及虚拟显示器进程..."
+        pkill -f "sing-box" || true
+        pkill -f "chrome" || true
+        pkill -f "chromedriver" || true
+        pkill -f "Xvfb" || true
+
+    - name: 🗑️ 清理历史工作流记录 (仅保留最近 1 条)
+      if: always()
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+      run: |
+        echo "正在清理历史工作流记录..."
+        OLD_RUNS=$(gh run list --workflow "renew.yml" --limit 50 --json databaseId --jq '.[1:][].databaseId' || true)
+        for RUN_ID in $OLD_RUNS; do
+          echo "删除旧运行记录 ID: $RUN_ID"
+          gh run delete "$RUN_ID" || true
+        done
