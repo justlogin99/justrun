@@ -85,10 +85,15 @@ def update_github_secret(new_cookie_json: str):
 
 def dump_and_sync_cookies(sb):
     try:
-        cookies = sb.driver.get_cookies()
+        cookies = None
+        try:
+            cookies = sb.get_cookies()
+        except Exception:
+            cookies = sb.driver.get_cookies()
+
         if not cookies:
             return
-        # 过滤关键身份与防重放 Cookie
+            
         valid_keys = [".AspNetCore.Identity.Application", "idsrv.session", "_jrnm_clct", ".AspNetCore.Antiforgery.NCGjD_ZE8wU"]
         filtered_cookies = [c for c in cookies if c.get("name") in valid_keys or "AspNetCore" in c.get("name", "")]
         cookie_payload = filtered_cookies if filtered_cookies else cookies
@@ -96,7 +101,7 @@ def dump_and_sync_cookies(sb):
         cookie_json = json.dumps(cookie_payload)
         update_github_secret(cookie_json)
     except Exception as e:
-        print(f"提取 Cookie 失败: {e}")
+        print(f"提取 Cookie 异常: {e}")
 
 # ============================================================
 #  页面注入脚本 (Turnstile 辅助)
@@ -381,7 +386,7 @@ def form_login(sb) -> bool:
     return True
 
 # ============================================================
-#  续期操作模块 (弹窗 CF 验证 + Just Reset 点击)
+#  续期操作模块
 # ============================================================
 def click_just_reset_button(sb) -> bool:
     print("正在定位并点击 Just Reset 确认按钮...")
@@ -489,6 +494,11 @@ def renew(sb) -> bool:
     try:
         sb.refresh()
         time.sleep(5)
+        
+        # 1. 优先提取最新有效 Cookie 并同步覆盖 GitHub Secret
+        dump_and_sync_cookies(sb)
+
+        # 2. 读取倒计时文本
         timer_text = "已提交重置"
         for sel in ['span.font-mono', 'section div']:
             if sb.is_element_visible(sel):
@@ -500,9 +510,6 @@ def renew(sb) -> bool:
         print(f"当前应用剩余时间: {timer_text}")
         sb.save_screenshot("renew_success.png")
         send_tg_message("✅", "续期完成", timer_text)
-        
-        # 续期成功后提取最新有效 Cookie 回写 Secrets
-        dump_and_sync_cookies(sb)
         return True
     except Exception as e:
         print(f"读取状态异常: {e}")
