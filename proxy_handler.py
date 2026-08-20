@@ -7,11 +7,12 @@ Supported protocols:
   socks5://[user:pass@]host:port
   http://[user:pass@]host:port
   https://[user:pass@]host:port
-  vless://uuid@host:port?security=tls&type=ws&...#name
+  vless://uuid@host:port?security=tls|reality&pbk=xxx&sid=yyy&type=ws&...#name
   vmess://base64EncodedJSON
   hy2://password@host:port?sni=xxx&insecure=1
   hysteria2://password@host:port?sni=xxx
   tuic://uuid:password@host:port?sni=xxx&alpn=h3&congestion_control=bbr
+  anytls://password@host:port?sni=xxx&insecure=1
 
 Output: config.json with HTTP inbound on 127.0.0.1:8080
 """
@@ -225,6 +226,30 @@ def parse_hysteria2(parsed, params):
     return outbound
 
 
+def parse_anytls(parsed, params):
+    outbound = {
+        "type": "anytls",
+        "tag": "proxy",
+        "server": parsed.hostname,
+        "server_port": parsed.port or 443,
+        "password": unquote(parsed.username or ""),
+    }
+
+    tls = {"enabled": True}
+    sni = params.get("sni", [""])[0]
+    if sni:
+        tls["server_name"] = sni
+    insecure = params.get("insecure", params.get("allowInsecure", ["0"]))[0]
+    if insecure == "1":
+        tls["insecure"] = True
+    alpn = params.get("alpn", [""])[0]
+    if alpn:
+        tls["alpn"] = alpn.split(",")
+    outbound["tls"] = tls
+
+    return outbound
+
+
 def parse_tuic(parsed, params):
     outbound = {
         "type": "tuic",
@@ -291,21 +316,14 @@ def main():
             outbound = parse_hysteria2(parsed, params)
         elif scheme == "tuic":
             outbound = parse_tuic(parsed, params)
+        elif scheme == "anytls":
+            outbound = parse_anytls(parsed, params)
         else:
             print(f"Unsupported protocol: {scheme}")
             sys.exit(1)
 
     config = {
         "log": {"level": "info", "timestamp": True},
-        "dns": {
-            "servers": [
-                # 增加 "detour": "direct"，强制 DNS 请求绕过代理直连，打破死循环
-                {"address": "8.8.8.8", "detour": "direct"},
-                {"address": "1.1.1.1", "detour": "direct"}
-            ],
-            # 强制仅使用 IPv4，防止 GitHub Actions 环境下的 IPv6 路由黑洞
-            "strategy": "ipv4_only"
-        },
         "inbounds": [
             {
                 "type": "http",
@@ -316,11 +334,8 @@ def main():
         ],
         "outbounds": [
             outbound,
-            {"type": "direct", "tag": "direct"}
+            {"type": "direct", "tag": "direct"},
         ],
-        "route": {
-            "auto_detect_interface": True
-        }
     }
 
     with open("config.json", "w") as f:
