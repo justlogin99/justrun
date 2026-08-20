@@ -290,37 +290,23 @@ def renew(sb) -> bool:
     print("   开始自动续期流程")
     print("="*50)
     
-    print("进入控制面板: https://justrunmy.app/panel/application/56317")
-    sb.open("https://justrunmy.app/panel/application/56317")
+    # 1. 直接打开你的应用详情页
+    app_url = "https://justrunmy.app/panel/application/56317"
+    print(f"进入应用详情页: {app_url}")
+    sb.open(app_url)
     time.sleep(5)
 
-    print("自动读取应用名称...")
-    retry_count = 3
-    found = False
-    for attempt in range(1, retry_count + 1):
-        try:
-            sb.wait_for_element('h3.font-semibold', timeout=15)
-            DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
-            print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
-            
-            sb.click('h3.font-semibold')
-            time.sleep(3)
-            print(f"成功进入应用详情页: {sb.get_current_url()}")
-            found = True
-            break
-        except Exception as e:
-            if attempt < retry_count:
-                print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
-                sb.refresh()
-                time.sleep(5)
-    
-    if not found:
-        sb.save_screenshot("renew_app_not_found.png")
-        send_tg_message("[X]", "续期失败(找不到应用)", "未知")
-        return False
+    # 尝试获取应用名称（失败则使用默认值）
+    try:
+        DYNAMIC_APP_NAME = sb.get_text('h1') or sb.get_text('h2') or "heisirenqi"
+        print(f"当前应用: {DYNAMIC_APP_NAME}")
+    except Exception:
+        DYNAMIC_APP_NAME = "heisirenqi"
 
+    # 2. 直接点击 Reset Timer 按钮
     print("点击 Reset Timer 按钮...")
     try:
+        sb.wait_for_element('button:contains("Reset Timer")', timeout=15)
         sb.click('button:contains("Reset Timer")')
         time.sleep(3)
     except Exception as e:
@@ -329,6 +315,7 @@ def renew(sb) -> bool:
         send_tg_message("[X]", "续期失败(找不到按钮)", "未知")
         return False
 
+    # 3. 检查弹窗内是否需要 Turnstile 验证
     print("检查续期弹窗内是否需要 CF 验证...")
     if sb.execute_script(_EXISTS_JS):
         if not handle_turnstile(sb):
@@ -337,8 +324,10 @@ def renew(sb) -> bool:
             send_tg_message("[X]", "续期失败(人机验证未过)", "未知")
             return False
 
+    # 4. 点击 Just Reset 确认续期
     print("点击 Just Reset 确认续期...")
     try:
+        sb.wait_for_element('button:contains("Just Reset")', timeout=10)
         sb.click('button:contains("Just Reset")')
         print("提交续期请求，等待服务器处理...")
         time.sleep(5) 
@@ -348,6 +337,7 @@ def renew(sb) -> bool:
         send_tg_message("[X]", "续期失败(无法确认)", "未知")
         return False
 
+    # 5. 验证最终倒计时状态
     print("验证最终倒计时状态...")
     try:
         sb.refresh()
