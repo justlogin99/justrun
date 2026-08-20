@@ -130,12 +130,15 @@ jobs:
       env:
         ACC: ${{ secrets[format('EML_{0}', matrix.account_index)] }}
         ACC_PWD: ${{ secrets[format('PWD_{0}', matrix.account_index)] }}
+        COOKIE: ${{ secrets[format('COOKIE_{0}', matrix.account_index)] }}
+        ACC_INDEX: ${{ matrix.account_index }}
+        GH_PAT: ${{ secrets.GH_PAT }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
         TG_TOKEN: ${{ secrets.TG_TOKEN }}
         TG_ID: ${{ secrets.TG_ID }}
         PROXY_URL: ${{ secrets.PROXY_URL }}
       run: |
         echo "开始处理账号索引: ${{ matrix.account_index }}"
-        # 启动虚拟显示器并执行脚本
         xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
           python reset_timer.py
 
