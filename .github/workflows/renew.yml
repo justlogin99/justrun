@@ -1,4 +1,4 @@
-name: JustRunMy 自动续期 (无序随机版)
+name: JustRunMy 自动续期
 
 on:
   workflow_dispatch:
@@ -7,65 +7,15 @@ on:
     - cron: '0 22 * * *'
 
 jobs:
-  setup:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-      should_run: ${{ steps.check-schedule.outputs.should_run }}
-      base_delay: ${{ steps.pick-delay.outputs.base_delay }}
-      trigger_epoch: ${{ steps.pick-delay.outputs.trigger_epoch }}
-    steps:
-    - name: 📅 每日多账号随机签到
-      id: check-schedule
-      shell: bash
-      run: |
-        echo "should_run=true" >> $GITHUB_OUTPUT
-        echo "📅 每日签到模式已启动，所有账号将在不同时间执行"
-
-    - name: 🎲 计算基础延迟 (所有账号共享)
-      id: pick-delay
-      if: steps.check-schedule.outputs.should_run == 'true'
-      env:
-        RD: ${{ secrets.RD }}
-      run: |
-        if [ -n "$RD" ]; then
-          MIN=$(echo "$RD" | cut -d: -f1)
-          MAX=$(echo "$RD" | cut -d: -f2)
-        else
-          MIN=7200; MAX=21600
-        fi
-        DELAY=$(shuf -i $MIN-$MAX -n 1)
-        echo "base_delay=$DELAY" >> $GITHUB_OUTPUT
-        echo "trigger_epoch=$(date +%s)" >> $GITHUB_OUTPUT
-        H=$(( DELAY / 3600 )); M=$(( (DELAY % 3600) / 60 ))
-        echo "✅ 基础延迟: ${H}h${M}m，所有账号将在此之后分散执行"
-
-    - name: 🎲 生成账号矩阵
-      id: set-matrix
-      if: steps.check-schedule.outputs.should_run == 'true'
-      shell: bash
-      env:
-        ALL_SECRETS: ${{ toJson(secrets) }}
-      run: |
-        ACCOUNTS=$(echo "$ALL_SECRETS" | jq -r 'keys[] | select(startswith("EML_"))' | sed 's/EML_//' | shuf)
-        if [ -z "$ACCOUNTS" ]; then
-          echo "❌ 未检测到 EML_x 格式的 Secrets，请检查配置！"
-          exit 1
-        fi
-        INDEX_ARRAY=$(echo "$ACCOUNTS" | jq -R . | jq -s -c .)
-        echo "matrix=$INDEX_ARRAY" >> $GITHUB_OUTPUT
-        echo "✅ 账号矩阵已构建：$INDEX_ARRAY"
-
   renew:
-    needs: setup
-    if: needs.setup.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       max-parallel: 1
       fail-fast: false
       matrix:
-        account_index: ${{ fromJson(needs.setup.outputs.matrix) }}
+        # 如果有多个账号，写成 [1, 2, 3] 即可
+        account_index: [1]
 
     steps:
     - name: 📥 下载代码
@@ -76,22 +26,14 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: ⏳ 等待基础窗口 (只有第一个账号实际等待)
+    - name: ⏳ 随机延迟防关联 (仅定时触发执行)
       if: github.event_name == 'schedule'
       run: |
-        NOW=$(date +%s)
-        TRIGGER=${{ needs.setup.outputs.trigger_epoch }}
-        BASE=${{ needs.setup.outputs.base_delay }}
-        ELAPSED=$(( NOW - TRIGGER ))
-        if [ $ELAPSED -lt $BASE ]; then
-          SLEEP=$(( BASE - ELAPSED ))
-          echo "账号 ${{ matrix.account_index }} 基础窗口等待 ${SLEEP}s..."
-          sleep $SLEEP
-        else
-          echo "账号 ${{ matrix.account_index }} 基础窗口已过，立即执行"
-        fi
+        DELAY=$(( RANDOM % 3600 + 600 ))
+        echo "随机等待 ${DELAY}s 后开始执行..."
+        sleep $DELAY
 
-    - name: 🛡️ 启动 sing-box 代理代理
+    - name: 🛡️ 启动 sing-box 代理
       env:
         PROXY_URL: ${{ secrets.PROXY_URL }}
       run: |
@@ -101,20 +43,15 @@ jobs:
         fi
 
         SINGBOX_VER="1.13.14"
-        echo "正在安装 sing-box v$SINGBOX_VER..."
         wget -q "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
         tar -xzf "sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
         mv "sing-box-${SINGBOX_VER}-linux-amd64/sing-box" ./sing-box
         chmod +x ./sing-box
 
-        # 生成配置文件 (调用项目中的解析脚本)
         python proxy_handler.py
-
-        # 后台运行
         nohup ./sing-box run -c config.json > singbox.log 2>&1 &
         sleep 5
 
-        echo "🔍 验证代理出口..."
         export http_proxy=http://127.0.0.1:8080
         export https_proxy=http://127.0.0.1:8080
         curl -s --connect-timeout 10 https://api.ipify.org || echo "无法获取出口 IP"
@@ -141,13 +78,6 @@ jobs:
         echo "开始处理账号索引: ${{ matrix.account_index }}"
         xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
           python reset_timer.py
-
-    - name: ⏸️ 间隔等待 (前一个结束 1~3 分钟后下一个开始)
-      if: github.event_name == 'schedule' && success()
-      run: |
-        STAGGER=$(( RANDOM % 120 + 60 ))
-        echo "⏸️ 续期完成，等待 ${STAGGER}s 后执行下一个账号..."
-        sleep $STAGGER
 
     - name: 📸 错误截图上传
       if: failure()
