@@ -3,6 +3,7 @@
 
 import os
 import sys
+import json
 import time
 import subprocess
 import requests
@@ -19,6 +20,10 @@ EMAIL        = os.environ.get("ACC")
 PASSWORD     = os.environ.get("ACC_PWD")
 TG_BOT_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID   = os.environ.get("TG_ID")
+COOKIE_DATA  = os.environ.get("COOKIE")
+ACC_INDEX    = os.environ.get("ACC_INDEX", "1")
+GH_PAT       = os.environ.get("GH_PAT")
+GITHUB_REPO  = os.environ.get("GITHUB_REPOSITORY")
 
 if not EMAIL or not PASSWORD:
     print("致命错误：未找到 ACC 或 ACC_PWD 环境变量！")
@@ -56,6 +61,37 @@ def send_tg_message(status_icon, status_text, time_left):
             print(f"  Telegram 通知发送失败: {r.text}")
     except Exception as e:
         print(f"  Telegram 通知发送异常: {e}")
+
+# ============================================================
+#  GitHub Secrets 自动同步覆盖模块
+# ============================================================
+def update_github_secret(new_cookie_json: str):
+    if not GH_PAT or not GITHUB_REPO:
+        print("ℹ️ 未配置 GH_PAT 或不在 Actions 环境中，跳过自动更新 Secret。")
+        return
+
+    secret_name = f"COOKIE_{ACC_INDEX}"
+    print(f"🔄 正在同步更新 GitHub Secret: {secret_name}...")
+    try:
+        env_vars = dict(os.environ, GH_TOKEN=GH_PAT)
+        cmd = ["gh", "secret", "set", secret_name, "--repo", GITHUB_REPO, "--body", new_cookie_json]
+        res = subprocess.run(cmd, env=env_vars, capture_output=True, text=True, timeout=15)
+        if res.returncode == 0:
+            print(f"✅ 成功将最新 Cookie 同步并覆盖到 Secrets: {secret_name}")
+        else:
+            print(f"⚠️ 更新 Secret 失败: {res.stderr.strip()}")
+    except Exception as e:
+        print(f"⚠️ 执行 gh secret set 出现异常: {e}")
+
+def dump_and_sync_cookies(sb):
+    try:
+        cookies = sb.driver.get_cookies()
+        if not cookies:
+            return
+        cookie_json = json.dumps(cookies)
+        update_github_secret(cookie_json)
+    except Exception as e:
+        print(f"提取 Cookie 失败: {e}")
 
 # ============================================================
 #  页面注入脚本 (Turnstile 辅助)
@@ -230,9 +266,56 @@ def handle_turnstile(sb) -> bool:
     return False
 
 # ============================================================
-#  业务逻辑模块
+#  登录控制模块 (优先 Cookie，回退账密)
 # ============================================================
-def login(sb) -> bool:
+def try_cookie_login(sb) -> bool:
+    if not COOKIE_DATA:
+        print("未检测到 COOKIE Secret，直接使用账号密码登录。")
+        return False
+
+    print("🔑 检测到历史 Cookie，尝试通过 Cookie 快速登录...")
+    try:
+        sb.open("https://justrunmy.app/robots.txt")
+        time.sleep(2)
+
+        # 支持 JSON 数组格式或 Cookie 键值对字符串
+        raw_cookie = COOKIE_DATA.strip()
+        if raw_cookie.startswith("["):
+            cookies = json.loads(raw_cookie)
+            for c in cookies:
+                cookie_dict = {
+                    'name': c['name'],
+                    'value': c['value'],
+                    'domain': c.get('domain', '.justrunmy.app'),
+                    'path': c.get('path', '/')
+                }
+                try: sb.driver.add_cookie(cookie_dict)
+                except Exception: pass
+        else:
+            for item in raw_cookie.split(';'):
+                if '=' in item:
+                    k, v = item.strip().split('=', 1)
+                    try:
+                        sb.driver.add_cookie({'name': k, 'value': v, 'domain': '.justrunmy.app', 'path': '/'})
+                    except Exception: pass
+
+        print(f"Cookie 注入完成，验证登录态: {APP_URL}")
+        sb.open(APP_URL)
+        time.sleep(5)
+
+        curr_url = sb.get_current_url().lower()
+        if "/account/login" not in curr_url and not sb.is_element_visible('input[name="Password"]'):
+            print("🎉 Cookie 登录成功！跳过表单输入与验证码。")
+            dump_and_sync_cookies(sb)
+            return True
+        else:
+            print("⚠️ Cookie 已失效或不完整，降级为账号密码登录。")
+            return False
+    except Exception as e:
+        print(f"⚠️ Cookie 登录流程异常: {e}，将尝试账号密码登录。")
+        return False
+
+def form_login(sb) -> bool:
     print(f"打开登录页面: {LOGIN_URL}")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
     time.sleep(4)
@@ -285,6 +368,7 @@ def login(sb) -> bool:
         curr_url = sb.get_current_url().lower()
         if "/panel" in curr_url:
             print("登录成功，已进入控制面板！")
+            dump_and_sync_cookies(sb)
             return True
 
     if sb.is_element_visible('input[name="Password"]'):
@@ -292,17 +376,22 @@ def login(sb) -> bool:
         sb.save_screenshot("login_failed.png")
         return False
 
+    dump_and_sync_cookies(sb)
     return True
 
+# ============================================================
+#  续期操作模块
+# ============================================================
 def renew(sb) -> bool:
     global DYNAMIC_APP_NAME
     print("\n" + "=" * 50)
     print("   开始自动续期流程")
     print("=" * 50)
     
-    print(f"进入应用详情页: {APP_URL}")
-    sb.open(APP_URL)
-    time.sleep(5)
+    if sb.get_current_url().rstrip('/') != APP_URL.rstrip('/'):
+        print(f"进入应用详情页: {APP_URL}")
+        sb.open(APP_URL)
+        time.sleep(5)
 
     if "/account/login" in sb.get_current_url().lower() or sb.is_element_visible('input[name="Password"]'):
         print("致命错误：访问应用详情页时被重定向回登录页（未保持登录状态）！")
@@ -310,7 +399,6 @@ def renew(sb) -> bool:
         send_tg_message("❌", "续期失败(未保持登录状态)", "未知")
         return False
 
-    # 定位应用顶部的 Reset timer 按钮
     btn_selector = 'button[aria-label="Reset timer"], button[title="Reset timer"], button:contains("Reset timer")'
     print("定位并点击 Reset timer 按钮...")
     try:
@@ -359,11 +447,13 @@ def renew(sb) -> bool:
         print(f"当前应用剩余时间: {timer_text}")
         sb.save_screenshot("renew_success.png")
         send_tg_message("✅", "续期完成", timer_text)
+        dump_and_sync_cookies(sb)
         return True
     except Exception as e:
         print(f"读取倒计时文本异常，但重置指令已提交: {e}")
         sb.save_screenshot("renew_timer_read_fail.png")
         send_tg_message("⚠️", "重置已提交(读取剩余时间失败)", "未知")
+        dump_and_sync_cookies(sb)
         return True
 
 def main():
@@ -387,7 +477,8 @@ def main():
         except Exception:
             pass
 
-        if login(sb):
+        # 优先使用 Cookie 登录，失败再走账号密码
+        if try_cookie_login(sb) or form_login(sb):
             renew(sb)
         else:
             print("\n登录环节失败，终止后续续期操作。")
