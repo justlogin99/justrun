@@ -267,61 +267,6 @@ def login(sb) -> bool:
     else:
         print("未检测到 Turnstile")
 
-    print("敲击回车提交表单...")
-    sb.press_keys('input[name="Password"]', '\n')
-
-    print("等待登录跳转...")
-    for _ in range(12):
-        time.sleep(1)
-        if sb.get_current_url().split('?')[0].lower() != LOGIN_URL.lower():
-            break
-
-    if sb.get_current_url().split('?')[0].lower() != LOGIN_URL.lower():
-        print("登录成功！")
-        return True
-        
-    print("登录失败，页面没有跳转。")
-    sb.save_screenshot("login_failed.png")
-    return False
-
-def login(sb) -> bool:
-    print(f"打开登录页面: {LOGIN_URL}")
-    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
-    time.sleep(4)
-
-    try:
-        sb.wait_for_element('input[name="Email"]', timeout=15)
-    except Exception:
-        print("页面未加载出登录表单")
-        sb.save_screenshot("login_load_fail.png")
-        return False
-
-    print("关闭可能的 Cookie 弹窗...")
-    try:
-        for btn in sb.find_elements("button"):
-            if "Accept" in (btn.text or ""):
-                btn.click()
-                time.sleep(0.5)
-                break
-    except Exception:
-        pass
-
-    print(f"填写邮箱...")
-    js_fill_input(sb, 'input[name="Email"]', EMAIL)
-    time.sleep(0.3)
-    
-    print("填写密码...")
-    js_fill_input(sb, 'input[name="Password"]', PASSWORD)
-    time.sleep(1)
-
-    if sb.execute_script(_EXISTS_JS):
-        if not handle_turnstile(sb):
-            print("登录界面的 Turnstile 验证失败")
-            sb.save_screenshot("login_turnstile_fail.png")
-            return False
-    else:
-        print("未检测到 Turnstile")
-
     print("点击登录按钮提交表单...")
     try:
         if sb.is_element_visible('button[type="submit"]'):
