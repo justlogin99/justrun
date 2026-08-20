@@ -33,7 +33,7 @@ if not EMAIL or not PASSWORD:
 DYNAMIC_APP_NAME = "heisirenqi"
 
 # ============================================================
-#  Telegram 推送模块
+#  Telegram 推送模块 (前缀加 JRM)
 # ============================================================
 def send_tg_message(status_icon, status_text, time_left):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
@@ -44,7 +44,7 @@ def send_tg_message(status_icon, status_text, time_left):
     current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
     text = (
-        f"{DYNAMIC_APP_NAME}\n"
+        f"【JRM】{DYNAMIC_APP_NAME}\n"
         f"{status_icon} {status_text}\n"
         f"剩余: {time_left}\n"
         f"时间: {current_time_str}"
@@ -67,7 +67,7 @@ def send_tg_message(status_icon, status_text, time_left):
 # ============================================================
 def update_github_secret(new_cookie_json: str):
     if not GH_PAT or not GITHUB_REPO:
-        print("ℹ️ 未配置 GH_PAT 或不在 Actions 环境中，跳过自动更新 Secret。")
+        print("ℹ️ 未配置 GH_PAT，跳过自动更新 Secret。")
         return
 
     secret_name = f"COOKIE_{ACC_INDEX}"
@@ -88,7 +88,12 @@ def dump_and_sync_cookies(sb):
         cookies = sb.driver.get_cookies()
         if not cookies:
             return
-        cookie_json = json.dumps(cookies)
+        # 过滤关键身份与防重放 Cookie
+        valid_keys = [".AspNetCore.Identity.Application", "idsrv.session", "_jrnm_clct", ".AspNetCore.Antiforgery.NCGjD_ZE8wU"]
+        filtered_cookies = [c for c in cookies if c.get("name") in valid_keys or "AspNetCore" in c.get("name", "")]
+        cookie_payload = filtered_cookies if filtered_cookies else cookies
+        
+        cookie_json = json.dumps(cookie_payload)
         update_github_secret(cookie_json)
     except Exception as e:
         print(f"提取 Cookie 失败: {e}")
@@ -379,10 +384,7 @@ def form_login(sb) -> bool:
 #  续期操作模块 (弹窗 CF 验证 + Just Reset 点击)
 # ============================================================
 def click_just_reset_button(sb) -> bool:
-    """使用多重定位与 JS 注入确保点击弹窗中的 Just Reset 按钮"""
     print("正在定位并点击 Just Reset 确认按钮...")
-    
-    # 方式 1: 直接文本与 class 选择器
     selectors = [
         'button:contains("Just Reset")',
         '//button[contains(., "Just Reset")]',
@@ -398,7 +400,6 @@ def click_just_reset_button(sb) -> bool:
         except Exception:
             continue
 
-    # 方式 2: JavaScript 遍历点击包含 Just Reset 的按钮
     try:
         clicked = sb.execute_script("""
             var buttons = document.querySelectorAll('button');
@@ -429,7 +430,6 @@ def renew(sb) -> bool:
         sb.open(APP_URL)
         time.sleep(6)
 
-    # 1. 点击主界面上的 Reset timer 按钮以打开弹窗
     btn_selectors = [
         'button[aria-label="Reset timer"]',
         'button[title="Reset timer"]',
@@ -462,7 +462,6 @@ def renew(sb) -> bool:
             send_tg_message("❌", "续期失败(找不到入口按钮)", "未知")
             return False
 
-    # 2. 等待弹窗弹出并处理其中的 Cloudflare Turnstile 验证
     print("检查续期弹窗...")
     time.sleep(2)
     if sb.execute_script(_EXISTS_JS):
@@ -476,7 +475,6 @@ def renew(sb) -> bool:
     else:
         print("弹窗内未检测到 Turnstile 验证，直接继续...")
 
-    # 3. 验证通过后点击 Just Reset 按钮
     time.sleep(1)
     if not click_just_reset_button(sb):
         print("无法点击 Just Reset 确认按钮")
@@ -487,7 +485,6 @@ def renew(sb) -> bool:
     print("提交续期请求，等待服务器处理...")
     time.sleep(6)
 
-    # 4. 刷新页面并读取最新倒计时
     print("验证续期结果与剩余时间...")
     try:
         sb.refresh()
@@ -534,7 +531,6 @@ def main():
         except Exception:
             pass
 
-        # 优先使用 Cookie 登录，失败再走账号密码表单登录
         if try_cookie_login(sb) or form_login(sb):
             renew(sb)
         else:
