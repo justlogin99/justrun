@@ -9,6 +9,7 @@ import requests
 from seleniumbase import SB
 
 LOGIN_URL = "https://justrunmy.app/id/Account/Login"
+APP_URL   = "https://justrunmy.app/panel/application/56317"
 DOMAIN    = "justrunmy.app"
 
 # ============================================================
@@ -24,8 +25,7 @@ if not EMAIL or not PASSWORD:
     print("请检查 GitHub Repository Secrets 是否配置正确（EML_1, PWD_1...）。")
     sys.exit(1)
 
-# 全局变量，用于动态保存网页上抓取到的应用名称
-DYNAMIC_APP_NAME = "未知应用"
+DYNAMIC_APP_NAME = "heisirenqi"
 
 # ============================================================
 #  Telegram 推送模块
@@ -198,7 +198,7 @@ def _click_turnstile(sb):
 
 def handle_turnstile(sb) -> bool:
     print("处理 Cloudflare Turnstile 验证...")
-    time.sleep(2)
+    time.sleep(3)
     
     if sb.execute_script(_SOLVED_JS):
         print("  已静默通过")
@@ -229,6 +229,9 @@ def handle_turnstile(sb) -> bool:
     print("  Turnstile 6 次均失败")
     return False
 
+# ============================================================
+#  业务逻辑模块
+# ============================================================
 def login(sb) -> bool:
     print(f"打开登录页面: {LOGIN_URL}")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
@@ -284,7 +287,6 @@ def login(sb) -> bool:
             print("登录成功，已进入控制面板！")
             return True
 
-    # 再次验证当前页面是否依然包含登录元素
     if sb.is_element_visible('input[name="Password"]'):
         print("登录失败：依然停留在登录页，请检查账号密码或验证码。")
         sb.save_screenshot("login_failed.png")
@@ -292,29 +294,24 @@ def login(sb) -> bool:
 
     return True
 
-
 def renew(sb) -> bool:
     global DYNAMIC_APP_NAME
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("   开始自动续期流程")
-    print("="*50)
+    print("=" * 50)
     
-    app_url = "https://justrunmy.app/panel/application/56317"
-    print(f"进入应用详情页: {app_url}")
-    sb.open(app_url)
+    print(f"进入应用详情页: {APP_URL}")
+    sb.open(APP_URL)
     time.sleep(5)
 
-    # 检查是否被踢回了登录页
     if "/account/login" in sb.get_current_url().lower() or sb.is_element_visible('input[name="Password"]'):
-        print("致命错误：访问应用页面时被重定向回登录页（未处于登录状态）！")
+        print("致命错误：访问应用详情页时被重定向回登录页（未保持登录状态）！")
         sb.save_screenshot("renew_not_logged_in.png")
-        send_tg_message("[X]", "续期失败(未成功登录)", "未知")
+        send_tg_message("❌", "续期失败(未保持登录状态)", "未知")
         return False
 
-    DYNAMIC_APP_NAME = "heisirenqi"
-
-    # 使用精确的 aria-label / title 属性定位按钮
-    btn_selector = 'button[aria-label="Reset timer"], button[title="Reset timer"]'
+    # 定位应用顶部的 Reset timer 按钮
+    btn_selector = 'button[aria-label="Reset timer"], button[title="Reset timer"], button:contains("Reset timer")'
     print("定位并点击 Reset timer 按钮...")
     try:
         sb.wait_for_element(btn_selector, timeout=15)
@@ -323,7 +320,7 @@ def renew(sb) -> bool:
     except Exception as e:
         print(f"找不到 Reset timer 按钮: {e}")
         sb.save_screenshot("renew_reset_btn_not_found.png")
-        send_tg_message("[X]", "续期失败(找不到按钮)", "未知")
+        send_tg_message("❌", "续期失败(找不到按钮)", "未知")
         return False
 
     print("检查续期弹窗内是否需要 CF 验证...")
@@ -331,7 +328,7 @@ def renew(sb) -> bool:
         if not handle_turnstile(sb):
             print("弹窗内的 Turnstile 验证失败")
             sb.save_screenshot("renew_turnstile_fail.png")
-            send_tg_message("[X]", "续期失败(人机验证未过)", "未知")
+            send_tg_message("❌", "续期失败(弹窗人机验证未过)", "未知")
             return False
 
     print("点击 Just Reset 确认续期...")
@@ -339,19 +336,18 @@ def renew(sb) -> bool:
         confirm_selector = 'button:contains("Just Reset"), button:contains("Reset")'
         sb.wait_for_element(confirm_selector, timeout=10)
         sb.click(confirm_selector)
-        print("提交续期请求，等待处理...")
-        time.sleep(5) 
+        print("提交续期请求，等待服务器处理...")
+        time.sleep(5)
     except Exception as e:
         print(f"找不到确认按钮: {e}")
         sb.save_screenshot("renew_just_reset_not_found.png")
-        send_tg_message("[X]", "续期失败(无法确认)", "未知")
+        send_tg_message("❌", "续期失败(无法点击确认)", "未知")
         return False
 
     print("验证最终倒计时状态...")
     try:
         sb.refresh()
         time.sleep(4)
-        # 读取剩余时间文本
         timer_text = "已提交重置"
         for sel in ['span.font-mono', 'section div']:
             if sb.is_element_visible(sel):
@@ -360,15 +356,42 @@ def renew(sb) -> bool:
                     timer_text = txt
                     break
 
-        print(f"当前应用状态/时间: {timer_text}")
+        print(f"当前应用剩余时间: {timer_text}")
         sb.save_screenshot("renew_success.png")
-        send_tg_message("[OK]", "续期完成", timer_text)
+        send_tg_message("✅", "续期完成", timer_text)
         return True
     except Exception as e:
-        print(f"读取状态失败，但操作已执行: {e}")
+        print(f"读取倒计时文本异常，但重置指令已提交: {e}")
         sb.save_screenshot("renew_timer_read_fail.png")
-        send_tg_message("[!]", "读取状态失败", "未知")
-        return False
+        send_tg_message("⚠️", "重置已提交(读取剩余时间失败)", "未知")
+        return True
+
+def main():
+    print("=" * 50)
+    print("   JustRunMy.app 自动登录与续期脚本")
+    print("=" * 50)
+    
+    proxy_url_env = os.environ.get("PROXY_URL", "").strip()
+    sb_kwargs = {"uc": True, "test": True, "headless": False}
+    
+    if proxy_url_env:
+        local_proxy = "http://127.0.0.1:8080"
+        print(f"检测到代理配置，挂载本地通道: {local_proxy}")
+        sb_kwargs["proxy"] = local_proxy
+    
+    with SB(**sb_kwargs) as sb:
+        print("浏览器已启动")
+        try:
+            sb.open("https://api.ipify.org/?format=json")
+            print(f"当前出口 IP: {sb.get_text('body')}")
+        except Exception:
+            pass
+
+        if login(sb):
+            renew(sb)
+        else:
+            print("\n登录环节失败，终止后续续期操作。")
+            send_tg_message("❌", "登录失败", "未知")
 
 if __name__ == "__main__":
     main()
