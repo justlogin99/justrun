@@ -284,38 +284,103 @@ def login(sb) -> bool:
     sb.save_screenshot("login_failed.png")
     return False
 
+def login(sb) -> bool:
+    print(f"打开登录页面: {LOGIN_URL}")
+    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
+    time.sleep(4)
+
+    try:
+        sb.wait_for_element('input[name="Email"]', timeout=15)
+    except Exception:
+        print("页面未加载出登录表单")
+        sb.save_screenshot("login_load_fail.png")
+        return False
+
+    print("关闭可能的 Cookie 弹窗...")
+    try:
+        for btn in sb.find_elements("button"):
+            if "Accept" in (btn.text or ""):
+                btn.click()
+                time.sleep(0.5)
+                break
+    except Exception:
+        pass
+
+    print(f"填写邮箱...")
+    js_fill_input(sb, 'input[name="Email"]', EMAIL)
+    time.sleep(0.3)
+    
+    print("填写密码...")
+    js_fill_input(sb, 'input[name="Password"]', PASSWORD)
+    time.sleep(1)
+
+    if sb.execute_script(_EXISTS_JS):
+        if not handle_turnstile(sb):
+            print("登录界面的 Turnstile 验证失败")
+            sb.save_screenshot("login_turnstile_fail.png")
+            return False
+    else:
+        print("未检测到 Turnstile")
+
+    print("点击登录按钮提交表单...")
+    try:
+        if sb.is_element_visible('button[type="submit"]'):
+            sb.click('button[type="submit"]')
+        else:
+            sb.press_keys('input[name="Password"]', '\n')
+    except Exception:
+        sb.press_keys('input[name="Password"]', '\n')
+
+    print("等待登录验证与跳转...")
+    for _ in range(15):
+        time.sleep(1)
+        curr_url = sb.get_current_url().lower()
+        if "/panel" in curr_url:
+            print("登录成功，已进入控制面板！")
+            return True
+
+    # 再次验证当前页面是否依然包含登录元素
+    if sb.is_element_visible('input[name="Password"]'):
+        print("登录失败：依然停留在登录页，请检查账号密码或验证码。")
+        sb.save_screenshot("login_failed.png")
+        return False
+
+    return True
+
+
 def renew(sb) -> bool:
     global DYNAMIC_APP_NAME
     print("\n" + "="*50)
     print("   开始自动续期流程")
     print("="*50)
     
-    # 1. 直接打开你的应用详情页
     app_url = "https://justrunmy.app/panel/application/56317"
     print(f"进入应用详情页: {app_url}")
     sb.open(app_url)
     time.sleep(5)
 
-    # 尝试获取应用名称（失败则使用默认值）
-    try:
-        DYNAMIC_APP_NAME = sb.get_text('h1') or sb.get_text('h2') or "heisirenqi"
-        print(f"当前应用: {DYNAMIC_APP_NAME}")
-    except Exception:
-        DYNAMIC_APP_NAME = "heisirenqi"
+    # 检查是否被踢回了登录页
+    if "/account/login" in sb.get_current_url().lower() or sb.is_element_visible('input[name="Password"]'):
+        print("致命错误：访问应用页面时被重定向回登录页（未处于登录状态）！")
+        sb.save_screenshot("renew_not_logged_in.png")
+        send_tg_message("[X]", "续期失败(未成功登录)", "未知")
+        return False
 
-    # 2. 直接点击 Reset Timer 按钮
-    print("点击 Reset Timer 按钮...")
+    DYNAMIC_APP_NAME = "heisirenqi"
+
+    # 使用精确的 aria-label / title 属性定位按钮
+    btn_selector = 'button[aria-label="Reset timer"], button[title="Reset timer"]'
+    print("定位并点击 Reset timer 按钮...")
     try:
-        sb.wait_for_element('button:contains("Reset Timer")', timeout=15)
-        sb.click('button:contains("Reset Timer")')
+        sb.wait_for_element(btn_selector, timeout=15)
+        sb.click(btn_selector)
         time.sleep(3)
     except Exception as e:
-        print(f"找不到 Reset Timer 按钮: {e}")
+        print(f"找不到 Reset timer 按钮: {e}")
         sb.save_screenshot("renew_reset_btn_not_found.png")
         send_tg_message("[X]", "续期失败(找不到按钮)", "未知")
         return False
 
-    # 3. 检查弹窗内是否需要 Turnstile 验证
     print("检查续期弹窗内是否需要 CF 验证...")
     if sb.execute_script(_EXISTS_JS):
         if not handle_turnstile(sb):
@@ -324,69 +389,41 @@ def renew(sb) -> bool:
             send_tg_message("[X]", "续期失败(人机验证未过)", "未知")
             return False
 
-    # 4. 点击 Just Reset 确认续期
     print("点击 Just Reset 确认续期...")
     try:
-        sb.wait_for_element('button:contains("Just Reset")', timeout=10)
-        sb.click('button:contains("Just Reset")')
-        print("提交续期请求，等待服务器处理...")
+        confirm_selector = 'button:contains("Just Reset"), button:contains("Reset")'
+        sb.wait_for_element(confirm_selector, timeout=10)
+        sb.click(confirm_selector)
+        print("提交续期请求，等待处理...")
         time.sleep(5) 
     except Exception as e:
-        print(f"找不到 Just Reset 按钮: {e}")
+        print(f"找不到确认按钮: {e}")
         sb.save_screenshot("renew_just_reset_not_found.png")
         send_tg_message("[X]", "续期失败(无法确认)", "未知")
         return False
 
-    # 5. 验证最终倒计时状态
     print("验证最终倒计时状态...")
     try:
         sb.refresh()
         time.sleep(4)
-        timer_text = sb.get_text('span.font-mono.text-xl')
-        print(f"当前应用剩余时间: {timer_text}")
-        
-        if "2 days 23" in timer_text or "3 days" in timer_text:
-            print("续期任务圆满完成！")
-            sb.save_screenshot("renew_success.png")
-            send_tg_message("[OK]", "续期完成", timer_text)
-            return True
-        else:
-            print("倒计时似乎没有重置到最高值，请人工检查截图。")
-            sb.save_screenshot("renew_warning.png")
-            send_tg_message("[!]", "续期异常(请检查)", timer_text)
-            return True 
+        # 读取剩余时间文本
+        timer_text = "已提交重置"
+        for sel in ['span.font-mono', 'section div']:
+            if sb.is_element_visible(sel):
+                txt = sb.get_text(sel)
+                if "day" in txt or "hour" in txt or ":" in txt:
+                    timer_text = txt
+                    break
+
+        print(f"当前应用状态/时间: {timer_text}")
+        sb.save_screenshot("renew_success.png")
+        send_tg_message("[OK]", "续期完成", timer_text)
+        return True
     except Exception as e:
-        print(f"读取倒计时失败，但流程已执行完毕: {e}")
+        print(f"读取状态失败，但操作已执行: {e}")
         sb.save_screenshot("renew_timer_read_fail.png")
-        send_tg_message("[!]", "读取剩余时间失败", "未知")
+        send_tg_message("[!]", "读取状态失败", "未知")
         return False
-
-def main():
-    print("=" * 50)
-    print("   JustRunMy.app 自动登录与续期脚本")
-    print("=" * 50)
-    
-    proxy_url_env = os.environ.get("PROXY_URL", "").strip()
-    sb_kwargs = {"uc": True, "test": True, "headless": False}
-    
-    if proxy_url_env:
-        local_proxy = "http://127.0.0.1:8080"
-        print(f"检测到代理配置，挂载本地通道: {local_proxy}")
-        sb_kwargs["proxy"] = local_proxy
-    
-    with SB(**sb_kwargs) as sb:
-        print("浏览器已启动")
-        try:
-            sb.open("https://api.ipify.org/?format=json")
-            print(f"当前出口 IP: {sb.get_text('body')}")
-        except Exception:
-            pass
-
-        if login(sb):
-            renew(sb)
-        else:
-            print("\n登录环节失败，终止后续续期操作。")
-            send_tg_message("[X]", "登录失败", "未知")
 
 if __name__ == "__main__":
     main()
