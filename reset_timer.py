@@ -313,6 +313,110 @@ def try_cookie_login(sb) -> bool:
         print(f"⚠️ Cookie 登录流程异常: {e}，将尝试账号密码登录。")
         return False
 
+def form_login(sb) -> bool:
+    print(f"打开登录页面: {LOGIN_URL}")
+    sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
+    time.sleep(4)
+
+    try:
+        sb.wait_for_element('input[name="Email"]', timeout=15)
+    except Exception:
+        print("页面未加载出登录表单")
+        sb.save_screenshot("login_load_fail.png")
+        return False
+
+    print("关闭可能的 Cookie 弹窗...")
+    try:
+        for btn in sb.find_elements("button"):
+            if "Accept" in (btn.text or ""):
+                btn.click()
+                time.sleep(0.5)
+                break
+    except Exception:
+        pass
+
+    print(f"填写邮箱...")
+    js_fill_input(sb, 'input[name="Email"]', EMAIL)
+    time.sleep(0.3)
+    
+    print("填写密码...")
+    js_fill_input(sb, 'input[name="Password"]', PASSWORD)
+    time.sleep(1)
+
+    if sb.execute_script(_EXISTS_JS):
+        if not handle_turnstile(sb):
+            print("登录界面的 Turnstile 验证失败")
+            sb.save_screenshot("login_turnstile_fail.png")
+            return False
+    else:
+        print("未检测到 Turnstile")
+
+    print("点击登录按钮提交表单...")
+    try:
+        if sb.is_element_visible('button[type="submit"]'):
+            sb.click('button[type="submit"]')
+        else:
+            sb.press_keys('input[name="Password"]', '\n')
+    except Exception:
+        sb.press_keys('input[name="Password"]', '\n')
+
+    print("等待登录验证与跳转...")
+    for _ in range(15):
+        time.sleep(1)
+        curr_url = sb.get_current_url().lower()
+        if "/panel" in curr_url:
+            print("登录成功，已进入控制面板！")
+            return True
+
+    if sb.is_element_visible('input[name="Password"]'):
+        print("登录失败：依然停留在登录页，请检查账号密码或验证码。")
+        sb.save_screenshot("login_failed.png")
+        return False
+
+    return True
+
+# ============================================================
+#  续期操作模块 (弹窗 CF 验证 + Just Reset 点击)
+# ============================================================
+def click_just_reset_button(sb) -> bool:
+    """使用多重定位与 JS 注入确保点击弹窗中的 Just Reset 按钮"""
+    print("正在定位并点击 Just Reset 确认按钮...")
+    
+    # 方式 1: 直接文本与 class 选择器
+    selectors = [
+        'button:contains("Just Reset")',
+        '//button[contains(., "Just Reset")]',
+        'div.fixed button:contains("Just Reset")',
+        'button.border-slate-200'
+    ]
+    for sel in selectors:
+        try:
+            if sb.is_element_visible(sel):
+                sb.click(sel)
+                print(f"成功点击 Just Reset (选择器: {sel})")
+                return True
+        except Exception:
+            continue
+
+    # 方式 2: JavaScript 遍历点击包含 Just Reset 的按钮
+    try:
+        clicked = sb.execute_script("""
+            var buttons = document.querySelectorAll('button');
+            for (var btn of buttons) {
+                if (btn.textContent && btn.textContent.includes('Just Reset')) {
+                    btn.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        if clicked:
+            print("通过 JS 成功点击 Just Reset 按钮！")
+            return True
+    except Exception as e:
+        print(f"JS 点击 Just Reset 异常: {e}")
+
+    return False
 
 def renew(sb) -> bool:
     global DYNAMIC_APP_NAME
@@ -325,7 +429,7 @@ def renew(sb) -> bool:
         sb.open(APP_URL)
         time.sleep(6)
 
-    # 尝试多种选择器定位 Reset timer 按钮
+    # 1. 点击主界面上的 Reset timer 按钮以打开弹窗
     btn_selectors = [
         'button[aria-label="Reset timer"]',
         'button[title="Reset timer"]',
@@ -334,20 +438,19 @@ def renew(sb) -> bool:
     ]
     
     btn_found = False
-    print("定位并点击 Reset timer 按钮...")
+    print("定位并打开续期弹窗...")
     for sel in btn_selectors:
         try:
             if sb.is_element_visible(sel):
                 sb.click(sel)
                 btn_found = True
-                print(f"成功点击按钮 (选择器: {sel})")
+                print(f"成功点击主界面 Reset timer 按钮 (选择器: {sel})")
                 time.sleep(3)
                 break
         except Exception:
             continue
 
     if not btn_found:
-        print("找不到 Reset timer 按钮，尝试等待加载...")
         try:
             sb.wait_for_element('button[aria-label="Reset timer"]', timeout=10)
             sb.click('button[aria-label="Reset timer"]')
@@ -356,33 +459,39 @@ def renew(sb) -> bool:
         except Exception as e:
             print(f"无法定位到 Reset timer 按钮: {e}")
             sb.save_screenshot("renew_reset_btn_not_found.png")
-            send_tg_message("❌", "续期失败(找不到按钮)", "未知")
+            send_tg_message("❌", "续期失败(找不到入口按钮)", "未知")
             return False
 
-    # 检查弹窗人机验证
+    # 2. 等待弹窗弹出并处理其中的 Cloudflare Turnstile 验证
+    print("检查续期弹窗...")
+    time.sleep(2)
     if sb.execute_script(_EXISTS_JS):
-        print("检查续期弹窗内是否需要 CF 验证...")
+        print("检测到弹窗内包含 Cloudflare Turnstile 验证框，开始验证...")
         if not handle_turnstile(sb):
             print("弹窗内的 Turnstile 验证失败")
             sb.save_screenshot("renew_turnstile_fail.png")
-            send_tg_message("❌", "续期失败(弹窗人机验证未过)", "未知")
+            send_tg_message("❌", "续期失败(弹窗人机验证未通过)", "未知")
             return False
+        print("✅ 弹窗内 CF 验证已顺利通过！")
+    else:
+        print("弹窗内未检测到 Turnstile 验证，直接继续...")
 
-    # 确认提交
-    print("点击 Just Reset 确认续期...")
-    try:
-        confirm_selector = 'button:contains("Just Reset"), button:contains("Reset")'
-        sb.wait_for_element(confirm_selector, timeout=10)
-        sb.click(confirm_selector)
-        print("提交续期请求，等待服务器处理...")
-        time.sleep(5)
-    except Exception as e:
-        print(f"未出现确认弹窗或已直接生效: {e}")
+    # 3. 验证通过后点击 Just Reset 按钮
+    time.sleep(1)
+    if not click_just_reset_button(sb):
+        print("无法点击 Just Reset 确认按钮")
+        sb.save_screenshot("renew_just_reset_not_found.png")
+        send_tg_message("❌", "续期失败(无法点击确认按钮)", "未知")
+        return False
 
-    # 读取倒计时并完成回写
+    print("提交续期请求，等待服务器处理...")
+    time.sleep(6)
+
+    # 4. 刷新页面并读取最新倒计时
+    print("验证续期结果与剩余时间...")
     try:
         sb.refresh()
-        time.sleep(4)
+        time.sleep(5)
         timer_text = "已提交重置"
         for sel in ['span.font-mono', 'section div']:
             if sb.is_element_visible(sel):
@@ -395,7 +504,7 @@ def renew(sb) -> bool:
         sb.save_screenshot("renew_success.png")
         send_tg_message("✅", "续期完成", timer_text)
         
-        # 流程全部成功后再更新 Secrets
+        # 续期成功后提取最新有效 Cookie 回写 Secrets
         dump_and_sync_cookies(sb)
         return True
     except Exception as e:
@@ -425,7 +534,7 @@ def main():
         except Exception:
             pass
 
-        # 优先使用 Cookie 登录，失败再走账号密码
+        # 优先使用 Cookie 登录，失败再走账号密码表单登录
         if try_cookie_login(sb) or form_login(sb):
             renew(sb)
         else:
