@@ -25,6 +25,8 @@ jobs:
       fail-fast: false
 
       matrix:
+        # 一个账号就写 [1]
+        # 多个账号例如：[1, 2, 3]
         account_index: [1]
 
     steps:
@@ -124,22 +126,21 @@ jobs:
 
 
     # ========================================================
-    # 启动多节点代理
+    # 启动当前账号专属的多节点代理
     #
-    # proxy_handler 会：
+    # 账号1 → PROXY_URL_1
+    # 账号2 → PROXY_URL_2
+    # 账号3 → PROXY_URL_3
     #
-    # 节点1 ❌
-    # 节点2 ❌
-    # 节点3 ✅
-    #
-    # 自动使用第一个真正可以出网的节点
+    # YML 会把对应 Secret 映射成统一的 PROXY_URL
+    # proxy_handler.py 无需修改
     # ========================================================
 
     - name: 🛡️ 启动多节点 sing-box
 
       env:
 
-        PROXY_URL: ${{ secrets.PROXY_URL }}
+        PROXY_URL: ${{ secrets[format('PROXY_URL_{0}', matrix.account_index)] }}
 
         SINGBOX_BIN: ./sing-box
 
@@ -147,7 +148,7 @@ jobs:
 
         if [ -z "$PROXY_URL" ]; then
 
-          echo "❌ PROXY_URL 未配置"
+          echo "❌ PROXY_URL_${{ matrix.account_index }} 未配置"
 
           exit 1
 
@@ -172,7 +173,7 @@ jobs:
 
 
     # ========================================================
-    # 运行账号
+    # 运行当前账号
     # ========================================================
 
     - name: 🚀 运行账号 ${{ matrix.account_index }} 续期
@@ -180,7 +181,7 @@ jobs:
       env:
 
         # ----------------------------------------------------
-        # 账号
+        # 当前账号
         # ----------------------------------------------------
 
         ACC: ${{ secrets[format('EML_{0}', matrix.account_index)] }}
@@ -213,10 +214,10 @@ jobs:
 
 
         # ----------------------------------------------------
-        # 多节点代理
+        # 当前账号专属代理
         # ----------------------------------------------------
 
-        PROXY_URL: ${{ secrets.PROXY_URL }}
+        PROXY_URL: ${{ secrets[format('PROXY_URL_{0}', matrix.account_index)] }}
 
         SINGBOX_BIN: ./sing-box
 
