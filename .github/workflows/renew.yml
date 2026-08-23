@@ -2,78 +2,57 @@ name: JustRunMy 自动续期
 
 on:
   schedule:
-     - cron: '0 13 * * *'   # 每天 UTC 00:00 (北京时间 08:00) 运行一次
+    - cron: '0 13 * * *'   # 每天 UTC 00:00 (北京时间 08:00) 运行一次
   workflow_dispatch:      # 允许在 GitHub 网页手动点击触发
-   
 
 permissions:
   contents: read
   actions: write
 
 jobs:
-
   renew:
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 360
 
     strategy:
       max-parallel: 1
       fail-fast: false
-
       matrix:
         # 一个账号就写 [1]
         # 多个账号例如：[1, 2, 3]
         account_index: [1]
 
     steps:
-
     # ========================================================
     # 下载代码
     # ========================================================
-
     - name: 📥 下载代码
       uses: actions/checkout@v4
-
 
     # ========================================================
     # Python
     # ========================================================
-
     - name: 🐍 设置 Python 环境
       uses: actions/setup-python@v4
-
       with:
         python-version: '3.11'
-
 
     # ========================================================
     # 定时任务随机延迟
     # ========================================================
-
     - name: ⏳ 随机延迟防关联
       if: github.event_name == 'schedule'
-
       run: |
-
         DELAY=$(( RANDOM % 3600 + 600 ))
-
         echo "随机等待 ${DELAY}s 后开始执行..."
-
         sleep "$DELAY"
-
 
     # ========================================================
     # 安装基础依赖
     # ========================================================
-
     - name: 🛠️ 安装系统与 Python 依赖
-
       run: |
-
         sudo apt-get update
-
         sudo apt-get install -y \
           xvfb \
           x11-utils \
@@ -86,150 +65,83 @@ jobs:
           seleniumbase \
           requests
 
-
     # ========================================================
     # 安装 ChromeDriver
     # ========================================================
-
     - name: 🌐 安装 ChromeDriver
-
       run: |
-
         seleniumbase install chromedriver
-
 
     # ========================================================
     # 下载 sing-box
     # ========================================================
-
     - name: 📦 安装 sing-box
-
       run: |
-
         SINGBOX_VER="1.13.14"
-
         wget -q \
           "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
-
         tar -xzf \
           "sing-box-${SINGBOX_VER}-linux-amd64.tar.gz"
-
         mv \
           "sing-box-${SINGBOX_VER}-linux-amd64/sing-box" \
           ./sing-box
-
         chmod +x ./sing-box
-
         ./sing-box version
-
 
     # ========================================================
     # 启动当前账号专属的多节点代理
-    #
-    # 账号1 → PROXY_URL_1
-    # 账号2 → PROXY_URL_2
-    # 账号3 → PROXY_URL_3
-    #
-    # YML 会把对应 Secret 映射成统一的 PROXY_URL
-    # proxy_handler.py 无需修改
     # ========================================================
-
     - name: 🛡️ 启动多节点 sing-box
-
       env:
-
         PROXY_URL: ${{ secrets[format('PROXY_URL_{0}', matrix.account_index)] }}
-
         SINGBOX_BIN: ./sing-box
-
       run: |
-
         if [ -z "$PROXY_URL" ]; then
-
           echo "❌ PROXY_URL_${{ matrix.account_index }} 未配置"
-
           exit 1
-
         fi
 
         python proxy_handler.py start
 
         echo "当前代理节点："
-
         python proxy_handler.py current
-
-        echo "测试代理出口："
-
-        curl \
-          --proxy http://127.0.0.1:8080 \
-          --connect-timeout 15 \
-          --max-time 30 \
-          -s \
-          https://api.ipify.org
-
-        echo
-
 
     # ========================================================
     # 运行当前账号
     # ========================================================
-
     - name: 🚀 运行账号 ${{ matrix.account_index }} 续期
-
       env:
-
         # ----------------------------------------------------
         # 当前账号
         # ----------------------------------------------------
-
         ACC: ${{ secrets[format('EML_{0}', matrix.account_index)] }}
-
         ACC_PWD: ${{ secrets[format('PWD_{0}', matrix.account_index)] }}
-
         APP_ID: ${{ secrets[format('APP_ID_{0}', matrix.account_index)] }}
-
         COOKIE: ${{ secrets[format('COOKIE_{0}', matrix.account_index)] }}
-
         ACC_INDEX: ${{ matrix.account_index }}
-
 
         # ----------------------------------------------------
         # GitHub
         # ----------------------------------------------------
-
         GH_PAT: ${{ secrets.GH_PAT }}
-
         GITHUB_REPOSITORY: ${{ github.repository }}
-
 
         # ----------------------------------------------------
         # Telegram
         # ----------------------------------------------------
-
         TG_TOKEN: ${{ secrets.TG_TOKEN }}
-
         TG_ID: ${{ secrets.TG_ID }}
-
 
         # ----------------------------------------------------
         # 当前账号专属代理
         # ----------------------------------------------------
-
         PROXY_URL: ${{ secrets[format('PROXY_URL_{0}', matrix.account_index)] }}
-
         SINGBOX_BIN: ./sing-box
-
         PROXY_HANDLER: ./proxy_handler.py
-
-
       run: |
-
         echo "=============================================="
-
         echo "开始处理账号"
-
         echo "账号索引: ${{ matrix.account_index }}"
-
         echo "=============================================="
 
         xvfb-run \
@@ -237,65 +149,40 @@ jobs:
           --server-args="-screen 0 1920x1080x24" \
           python reset_timer.py
 
-
     # ========================================================
     # 上传错误截图
     # ========================================================
-
     - name: 📸 错误截图上传
-
       if: failure()
-
       uses: actions/upload-artifact@v4
-
       with:
-
         name: debug-acc-${{ matrix.account_index }}
-
         path: |
           *.png
           singbox.log
-
         retention-days: 1
-
 
     # ========================================================
     # 清理
     # ========================================================
-
     - name: 🧹 清理代理与后台进程
-
       if: always()
-
       run: |
-
         echo "正在清理后台进程..."
-
         python proxy_handler.py stop || true
-
         pkill -f "chrome" || true
-
         pkill -f "chromedriver" || true
-
         pkill -f "Xvfb" || true
-
 
     # ========================================================
     # 清理旧 Workflow
     # ========================================================
-
     - name: 🗑️ 清理历史工作流记录
-
       if: always()
-
       env:
-
         GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
-
       run: |
-
         echo "正在清理历史工作流记录..."
-
         OLD_RUNS=$(
           gh run list \
             --workflow "renew.yml" \
@@ -306,9 +193,6 @@ jobs:
         )
 
         for RUN_ID in $OLD_RUNS; do
-
           echo "删除旧运行记录 ID: $RUN_ID"
-
           gh run delete "$RUN_ID" || true
-
         done
