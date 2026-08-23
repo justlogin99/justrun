@@ -1,12 +1,10 @@
 name: JustRunMy 自动续期
 
 on:
-  workflow_dispatch:
-
   schedule:
-    # GitHub Actions 使用 UTC
-    # 北京时间每天 21:00
-    - cron: '0 13 * * *'
+     - cron: '0 13 * * *'   # 每天 UTC 00:00 (北京时间 08:00) 运行一次
+  workflow_dispatch:      # 允许在 GitHub 网页手动点击触发
+   
 
 permissions:
   contents: read
