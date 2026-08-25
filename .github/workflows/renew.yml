@@ -2,7 +2,7 @@ name: JustRunMy 自动续期
 
 on:
   schedule:
-    - cron: '0 13 * * *'   # 每天 UTC 00:00 (北京时间 08:00) 运行一次
+    - cron: '0 20 * * *'   # 每天 UTC 00:00 (北京时间 08:00) 运行一次
   workflow_dispatch:      # 允许在 GitHub 网页手动点击触发
 
 permissions:
@@ -36,16 +36,6 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-
-    # ========================================================
-    # 定时任务随机延迟
-    # ========================================================
-    - name: ⏳ 随机延迟防关联
-      if: github.event_name == 'schedule'
-      run: |
-        DELAY=$(( RANDOM % 3600 + 600 ))
-        echo "随机等待 ${DELAY}s 后开始执行..."
-        sleep "$DELAY"
 
     # ========================================================
     # 安装基础依赖
